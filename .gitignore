@@ -1,0 +1,38 @@
+## Node.js
+/node_modules
+
+## IDE files
+/.idea
+
+/.vscode
+
+## settings
+google-credentials.json
+
+.envrc
+.env
+
+## ignore all .env files
+*.csv
+
+## ignore test code
+/test
+
+## npm files
+package-lock.json
+
+## yarn files
+yarn.lock
+
+yarn-error.log
+
+## buildCard cache
+/lib/buildCard/image/cache/*
+
+## genshin-manager cache
+/cache/*
+
+## output data directory
+/data/logs/*.log
+
+!/data/logs/sample.log
