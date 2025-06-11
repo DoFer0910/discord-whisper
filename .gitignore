@@ -36,3 +36,6 @@ yarn-error.log
 /data/logs/*.log
 
 !/data/logs/sample.log
+
+## test
+/src/test

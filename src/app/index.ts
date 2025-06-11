@@ -1,20 +1,17 @@
-import { Client, ClientOptions, DiscordAPIError, HTTPError } from 'discord.js'
+import {
+  Client,
+  ClientOptions,
+  DiscordAPIError,
+  GatewayIntentBits,
+  HTTPError,
+} from 'discord.js'
 import { ModuleManager } from 'mopo-discordjs'
 import path from 'path'
 
 import { env } from '@/utils/env'
 
 const options: ClientOptions = {
-  intents: [
-    'Guilds',
-    'GuildMessages',
-    'GuildMessageReactions',
-    'GuildMembers',
-    'GuildVoiceStates',
-    'GuildIntegrations',
-    'GuildEmojisAndStickers',
-    'MessageContent',
-  ],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
   waitGuildTimeout: 60000,
   rest: { timeout: 60000 },
 }

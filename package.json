@@ -6,7 +6,8 @@
 		"start": "ts-node -r tsconfig-paths/register src/app/index.ts",
 		"lint": "eslint .",
 		"debug": "node --max-old-space-size=2048 --expose-gc --inspect -r tsconfig-paths/register -r ts-node/register src/app/index.ts",
-		"dexDebug": "dexnode -r tsconfig-paths/register -r ts-node/register src/app/index.ts"
+		"dexDebug": "dexnode -r tsconfig-paths/register -r ts-node/register src/app/index.ts",
+		"test": "ts-node -r tsconfig-paths/register src/test/index.ts"
 	},
 	"engines": {
 		"node": ">=16.0.0"
@@ -15,16 +16,23 @@
 	"author": "Rollphes",
 	"license": "ISC",
 	"dependencies": {
-		"discord.js": "^14.19.3",
+		"@discordjs/opus": "^0.10.0",
+		"@discordjs/voice": "^0.18.0",
+		"discord.js": "^14.14.1",
 		"dotenv": "^16.5.0",
 		"mopo-discordjs": "^0.1.6",
+		"nodejs-whisper": "^0.2.9",
 		"path": "^0.12.7",
+		"prism-media": "^1.3.5",
+		"shelljs": "^0.10.0",
 		"ts-node": "^10.9.2",
 		"typescript": "^5.8.3"
 	},
 	"devDependencies": {
 		"@eslint/js": "^9.27.0",
 		"@types/node": "^22.15.24",
+		"@types/shelljs": "^0.8.16",
+		"@types/wav-encoder": "^1.3.3",
 		"eslint": "^9.27.0",
 		"eslint-config-prettier": "^10.1.5",
 		"eslint-plugin-prettier": "^5.4.0",
