@@ -1,5 +1,0 @@
-User: Rollphes(ID:746692528484515910)
-Transcription: 
-レポート出力用の動作テストになります
-
-

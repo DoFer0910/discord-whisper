@@ -26,16 +26,9 @@ yarn.lock
 
 yarn-error.log
 
-## buildCard cache
-/lib/buildCard/image/cache/*
-
-## genshin-manager cache
-/cache/*
-
-## output data directory
-/data/logs/*.log
-
-!/data/logs/sample.log
-
 ## test
 /src/test
+
+## temp
+/temp/*
+!/temp/.gitkeep
