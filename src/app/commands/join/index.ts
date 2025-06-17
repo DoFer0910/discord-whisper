@@ -26,6 +26,12 @@ export default {
       type: ApplicationCommandOptionType.Boolean,
       required: false,
     },
+    {
+      name: 'audio',
+      description: '音声ファイルの録音・出力を有効にする',
+      type: ApplicationCommandOptionType.Boolean,
+      required: false,
+    },
   ],
   execute: async (
     interaction: ChatInputCommandInteraction,
@@ -85,10 +91,12 @@ export default {
     const sendRealtimeMessage =
       interaction.options.getBoolean('realtime') ?? true
     const exportReport = interaction.options.getBoolean('report') ?? true
+    const exportAudio = interaction.options.getBoolean('audio') ?? true
 
     module.start(connection, {
       sendRealtimeMessage,
       exportReport,
+      exportAudio,
     })
 
     await interaction.editReply({

@@ -50,7 +50,8 @@ client.on('ready', () => {
   void (async (): Promise<void> => {
     console.log('--- Bot is ready ---')
     console.log('--- [1/2]Clearing commands ---')
-    await moduleManager.clearCommands()
+    console.log('--skipping command clearing--')
+    // await moduleManager.clearCommands()
     console.log('--- [2/2]Initializing modules ---')
     await moduleManager.init(path.join(__dirname))
     console.log('--  Bot successfully started --')

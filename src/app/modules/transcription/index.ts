@@ -20,7 +20,7 @@ import { ModelName } from '@/types/ModelName'
 export interface TranscriptionOption {
   sendRealtimeMessage: boolean
   exportReport: boolean
-  // exportAudio: boolean //TODO: Implemented in the future
+  exportAudio: boolean
 }
 
 interface GuildSession {
@@ -33,6 +33,14 @@ interface GuildSession {
   isQueueProcessing: boolean
   option: TranscriptionOption
   report: string
+  audioRecordings: {
+    uuid: string
+    userId: string
+    startTime: number
+    endTime?: number
+    filePath: string
+  }[]
+  sessionStartTime: number
 }
 
 export default class Transcription extends BaseModule {
@@ -44,10 +52,11 @@ export default class Transcription extends BaseModule {
     '../', // project root
     'temp',
   )
+
   private static readonly whisperOptions: IOptions = {
     modelName: ModelName.LARGE_V3_TURBO,
     autoDownloadModelName: ModelName.LARGE_V3_TURBO,
-    removeWavFileAfterTranscription: true,
+    removeWavFileAfterTranscription: false,
     withCuda: true,
     logger: console,
     whisperOptions: {
@@ -68,6 +77,15 @@ export default class Transcription extends BaseModule {
   }
 
   private guildSessions = new Map<string, GuildSession>()
+
+  private static getGuildTempDir(guildId: string): string {
+    return path.join(Transcription.TEMP_DIR, guildId)
+  }
+
+  private static ensureGuildTempDir(guildId: string): void {
+    const guildDir = Transcription.getGuildTempDir(guildId)
+    if (!fs.existsSync(guildDir)) fs.mkdirSync(guildDir, { recursive: true })
+  }
 
   public getGuildInProgress(guildId: string): boolean {
     const session = this.guildSessions.get(guildId)
@@ -117,6 +135,20 @@ export default class Transcription extends BaseModule {
         }
         console.log(`[discord-whisper]User ${userId} started speaking`)
         const uuid = crypto.randomUUID()
+        const currentTime = Date.now()
+
+        if (session.option.exportAudio) {
+          Transcription.ensureGuildTempDir(guildId)
+          session.audioRecordings.push({
+            uuid: uuid,
+            userId: userId,
+            startTime: currentTime,
+            filePath: path.join(
+              Transcription.getGuildTempDir(guildId),
+              `${uuid}.wav`,
+            ),
+          })
+        }
 
         const opusStream = connection.receiver.subscribe(userId, {
           end: {
@@ -125,23 +157,47 @@ export default class Transcription extends BaseModule {
           },
         })
 
-        await this.encodeOpusToPcm(uuid, opusStream)
-        if (this.isValidVoiceData(uuid)) {
+        opusStream.on('end', () => {
+          console.log(`[discord-whisper]Stream from user ${userId} has ended`)
+
+          if (session.option.exportAudio) {
+            console.log(
+              `[discord-whisper]Looking for recording with UUID: ${uuid}`,
+            )
+
+            const recording = session.audioRecordings.find(
+              (r) => r.uuid === uuid,
+            )
+
+            if (recording) {
+              recording.endTime = Date.now()
+              console.log(
+                `[discord-whisper]Set endTime for UUID ${uuid}: ${String(recording.endTime)}`,
+              )
+            } else {
+              console.warn(
+                `[discord-whisper]Recording not found for UUID: ${uuid}`,
+              )
+            }
+          }
+
+          opusStream.destroy()
+        })
+
+        await this.encodeOpusToPcm(guildId, uuid, opusStream)
+        await this.encodePcmToWav(guildId, uuid)
+        if (this.isValidVoiceData(guildId, uuid)) {
           session.queue.push({
             uuid: uuid,
             userId: userId,
             sendChannelId: connection.joinConfig.channelId,
             guildId: guildId,
           })
-          await this.encodePcmToWav(uuid)
           if (!session.isQueueProcessing) await this.progressQueue(guildId)
         }
-        fs.unlinkSync(path.join(Transcription.TEMP_DIR, `${uuid}.pcm`))
-
-        opusStream.on('end', () => {
-          console.log(`[discord-whisper]Stream from user ${userId} has ended`)
-          opusStream.destroy()
-        })
+        fs.unlinkSync(
+          path.join(Transcription.getGuildTempDir(guildId), `${uuid}.pcm`),
+        )
       })()
     })
 
@@ -175,7 +231,7 @@ export default class Transcription extends BaseModule {
               session.option.exportReport
             ) {
               const reportPath = path.join(
-                Transcription.TEMP_DIR,
+                Transcription.getGuildTempDir(guildId),
                 `report_${guildId}.txt`,
               )
               fs.writeFileSync(reportPath, session.report)
@@ -188,6 +244,29 @@ export default class Transcription extends BaseModule {
                   content: '今回のレポート:',
                   files: [attachment],
                 })
+              }
+            }
+
+            if (
+              connection.joinConfig.channelId &&
+              session.option.exportAudio &&
+              session.audioRecordings.length > 0
+            ) {
+              const mergedAudioPath = await this.mergeAudioFiles(
+                guildId,
+                session,
+              )
+              if (mergedAudioPath) {
+                const channel = await this.client.channels.fetch(
+                  connection.joinConfig.channelId,
+                )
+                const audioAttachment = new AttachmentBuilder(mergedAudioPath)
+                if (channel?.isVoiceBased()) {
+                  await channel.send({
+                    content: '録音ファイル:',
+                    files: [audioAttachment],
+                  })
+                }
               }
             }
             console.log('[discord-whisper]Queue is empty, stopping interval')
@@ -208,8 +287,11 @@ export default class Transcription extends BaseModule {
         option: {
           sendRealtimeMessage: true,
           exportReport: true,
+          exportAudio: true,
         },
         report: '',
+        audioRecordings: [],
+        sessionStartTime: Date.now(),
       })
     }
     const session = this.guildSessions.get(guildId)
@@ -219,6 +301,7 @@ export default class Transcription extends BaseModule {
   }
 
   private async encodeOpusToPcm(
+    guildId: string,
     uuid: string,
     opusStream: AudioReceiveStream,
   ): Promise<void> {
@@ -228,8 +311,9 @@ export default class Transcription extends BaseModule {
       rate: 48000,
     })
 
+    Transcription.ensureGuildTempDir(guildId)
     const out = fs.createWriteStream(
-      path.join(Transcription.TEMP_DIR, `${uuid}.pcm`),
+      path.join(Transcription.getGuildTempDir(guildId), `${uuid}.pcm`),
     )
     await pipeline(
       opusStream as unknown as NodeJS.ReadableStream,
@@ -238,11 +322,17 @@ export default class Transcription extends BaseModule {
     )
   }
 
-  private async encodePcmToWav(uuid: string): Promise<void> {
+  private async encodePcmToWav(guildId: string, uuid: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       console.log(`[discord-whisper]Encoding PCM to WAV for UUID: ${uuid}`)
-      const pcmFilePath = path.join(Transcription.TEMP_DIR, `${uuid}.pcm`)
-      const wavFilePath = path.join(Transcription.TEMP_DIR, `${uuid}.wav`)
+      const pcmFilePath = path.join(
+        Transcription.getGuildTempDir(guildId),
+        `${uuid}.pcm`,
+      )
+      const wavFilePath = path.join(
+        Transcription.getGuildTempDir(guildId),
+        `${uuid}.wav`,
+      )
 
       const command = `ffmpeg -f s16le -ar 48k -ac 2 -i "${pcmFilePath}" "${wavFilePath}"`
       const result = shell.exec(command)
@@ -252,9 +342,15 @@ export default class Transcription extends BaseModule {
     })
   }
 
-  private async transcribeAudio(uuid: string): Promise<string | undefined> {
+  private async transcribeAudio(
+    guildId: string,
+    uuid: string,
+  ): Promise<string | undefined> {
     console.log(`[discord-whisper]Transcribing audio for UUID: ${uuid}`)
-    const wavFilePath = path.join(Transcription.TEMP_DIR, `${uuid}.wav`)
+    const wavFilePath = path.join(
+      Transcription.getGuildTempDir(guildId),
+      `${uuid}.wav`,
+    )
     if (!fs.existsSync(wavFilePath)) {
       console.error(`[discord-whisper]WAV file not found: ${wavFilePath}`)
       return
@@ -323,7 +419,10 @@ export default class Transcription extends BaseModule {
     session.isQueueProcessing = true
     const completedItem = session.queue.shift()
     if (completedItem) {
-      const context = await this.transcribeAudio(completedItem.uuid)
+      const context = await this.transcribeAudio(
+        completedItem.guildId,
+        completedItem.uuid,
+      )
       if (context) {
         if (completedItem.sendChannelId && session.option.sendRealtimeMessage) {
           const channel = await this.client.channels.fetch(
@@ -351,8 +450,11 @@ export default class Transcription extends BaseModule {
     else session.isQueueProcessing = false
   }
 
-  private isValidVoiceData(uuid: string): boolean {
-    const pcmFilePath = path.join(Transcription.TEMP_DIR, `${uuid}.pcm`)
+  private isValidVoiceData(guildId: string, uuid: string): boolean {
+    const pcmFilePath = path.join(
+      Transcription.getGuildTempDir(guildId),
+      `${uuid}.pcm`,
+    )
     if (!fs.existsSync(pcmFilePath)) {
       console.warn(`[discord-whisper]PCM file not found: ${pcmFilePath}`)
       return false
@@ -559,23 +661,132 @@ export default class Transcription extends BaseModule {
   }
 
   private cleanupTempFiles(guildId: string): void {
-    fs.readdir(Transcription.TEMP_DIR, (err, files) => {
-      if (err) {
-        console.error('[discord-whisper]Error reading temp directory:', err)
-        return
-      }
-      files.forEach((file) => {
-        if (
-          file.endsWith('.wav') ||
-          file.endsWith('.pcm') ||
-          file.endsWith('.txt') ||
-          file.includes(`_${guildId}_`) ||
-          file.includes(`_${guildId}.`)
-        ) {
-          fs.unlinkSync(path.join(Transcription.TEMP_DIR, file))
+    const guildDir = Transcription.getGuildTempDir(guildId)
+    if (fs.existsSync(guildDir)) {
+      try {
+        const files = fs.readdirSync(guildDir)
+        files.forEach((file) => {
+          const filePath = path.join(guildDir, file)
+          fs.unlinkSync(filePath)
           console.log(`[discord-whisper]Deleted temp file: ${file}`)
+        })
+        fs.rmdirSync(guildDir)
+        console.log(
+          `[discord-whisper]Deleted guild temp directory: ${guildDir}`,
+        )
+      } catch (error) {
+        console.error(
+          `[discord-whisper]Error cleaning up temp files for guild ${guildId}:`,
+          error,
+        )
+      }
+    }
+  }
+
+  private async mergeAudioFiles(
+    guildId: string,
+    session: GuildSession,
+  ): Promise<string | null> {
+    try {
+      console.log(`[discord-whisper]Merging audio files for guild ${guildId}`)
+
+      const validRecordings = session.audioRecordings.filter(
+        (recording) => recording.endTime && fs.existsSync(recording.filePath),
+      )
+
+      if (validRecordings.length === 0) {
+        console.warn(
+          `[discord-whisper]No valid recordings found for guild ${guildId}`,
+        )
+        return null
+      }
+
+      validRecordings.sort((a, b) => a.startTime - b.startTime)
+
+      const outputPath = path.join(
+        Transcription.getGuildTempDir(guildId),
+        `merged_audio_${guildId}.wav`,
+      )
+
+      const inputFiles = validRecordings.map((recording, index) => {
+        const silence = this.calculateSilenceDuration(
+          session.sessionStartTime,
+          recording.startTime,
+          validRecordings,
+          index,
+        )
+        return {
+          file: recording.filePath,
+          silence: silence,
+          userId: recording.userId,
         }
       })
+
+      await this.mergeWithFFmpeg(inputFiles, outputPath)
+
+      console.log(
+        `[discord-whisper]Audio files merged successfully: ${outputPath}`,
+      )
+      return outputPath
+    } catch (error) {
+      console.error(`[discord-whisper]Error merging audio files:`, error)
+      return null
+    }
+  }
+
+  private calculateSilenceDuration(
+    sessionStart: number,
+    recordingStart: number,
+    allRecordings: GuildSession['audioRecordings'],
+    currentIndex: number,
+  ): number {
+    if (currentIndex === 0) {
+      return Math.max(0, recordingStart - sessionStart)
+    } else {
+      const previousRecording = allRecordings[currentIndex - 1]
+      const previousEndTime =
+        previousRecording.endTime ?? previousRecording.startTime
+      return Math.max(0, recordingStart - previousEndTime)
+    }
+  }
+
+  private async mergeWithFFmpeg(
+    inputFiles: { file: string; silence: number; userId: string }[],
+    outputPath: string,
+  ): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      try {
+        let command = 'ffmpeg -y'
+        let filterComplex = ''
+
+        inputFiles.forEach((input) => {
+          command += ` -i "${input.file}"`
+        })
+
+        let concatInputs = ''
+        inputFiles.forEach((input, index) => {
+          if (input.silence > 0) {
+            const silenceDurationSec = input.silence / 1000
+            filterComplex += `anullsrc=channel_layout=stereo:sample_rate=48000:duration=${silenceDurationSec.toString()}[silence${index.toString()}];`
+            concatInputs += `[silence${index.toString()}][${index.toString()}:a]`
+          } else {
+            concatInputs += `[${index.toString()}:a]`
+          }
+        })
+
+        filterComplex += `${concatInputs}concat=n=${(inputFiles.length * 2).toString()}:v=0:a=1[out]`
+
+        command += ` -filter_complex "${filterComplex}" -map "[out]" "${outputPath}"`
+
+        console.log(`[discord-whisper]Executing ffmpeg command: ${command}`)
+
+        const result = shell.exec(command)
+        if (result.code !== 0)
+          reject(new Error(`FFmpeg failed: ${result.stderr}`))
+        else resolve()
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error(String(error)))
+      }
     })
   }
 }
