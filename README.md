@@ -17,21 +17,23 @@ OpenAI-WhisperをつかってDiscordの音声通話の文字起こしをするBo
 ## How to Use?
 #### Env
 ```
-BOT_TOKEN=
-GUILD_ID=
+BOT_TOKEN=your_discord_bot_token
 ```
 
 #### Install
-```
+
+```bash
 npm install
 npx nodejs-whisper download
 ```
+
 > [!NOTE]
 > nodejs-whisperにWhisper部分の動作は依存しています。
 > 該当ライブラリのインストール手順を参照ください。
 
 #### Run
-```
+
+```bash
 npm run start
 ```
 

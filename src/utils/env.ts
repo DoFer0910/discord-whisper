@@ -1,7 +1,6 @@
 import 'dotenv/config'
 const envList = {
   BOT_TOKEN: process.env.BOT_TOKEN,
-  GUILD_ID: process.env.GUILD_ID,
 }
 function checkEnv(): void {
   console.log('---check environment variables---')

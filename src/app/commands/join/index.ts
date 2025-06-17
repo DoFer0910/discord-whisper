@@ -20,16 +20,16 @@ export default {
     await interaction.deferReply({
       ephemeral: true,
     })
-    if (module.inProgress) {
+    if (!interaction.guild) {
       await interaction.editReply({
-        content: '現在、別の処理が実行中です。しばらくお待ちください。',
+        content: 'このコマンドはサーバー内でのみ使用できます。',
       })
       return
     }
 
-    if (!interaction.guild) {
+    if (module.getGuildInProgress(interaction.guild.id)) {
       await interaction.editReply({
-        content: 'このコマンドはサーバー内でのみ使用できます。',
+        content: '現在、別の処理が実行中です。しばらくお待ちください。',
       })
       return
     }

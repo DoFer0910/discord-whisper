@@ -23,6 +23,18 @@ export interface TranscriptionOption {
   // exportAudio: boolean //TODO: Implemented in the future
 }
 
+interface GuildSession {
+  queue: {
+    uuid: string
+    userId: string
+    sendChannelId: string
+    guildId: string
+  }[]
+  isQueueProcessing: boolean
+  option: TranscriptionOption
+  report: string
+}
+
 export default class Transcription extends BaseModule {
   private static readonly TEMP_DIR = path.resolve(
     __dirname, // transcription
@@ -55,21 +67,13 @@ export default class Transcription extends BaseModule {
     },
   }
 
-  private queue: {
-    uuid: string
-    userId: string
-    sendChannelId: string
-  }[] = []
-  private isQueueProcessing = false
-  private nowOption: TranscriptionOption = {
-    sendRealtimeMessage: true,
-    exportReport: true,
-  }
+  private guildSessions = new Map<string, GuildSession>()
 
-  private report = ''
-
-  public get inProgress(): boolean {
-    return this.isQueueProcessing || this.queue.length > 0
+  public getGuildInProgress(guildId: string): boolean {
+    const session = this.guildSessions.get(guildId)
+    return session
+      ? session.isQueueProcessing || session.queue.length > 0
+      : false
   }
 
   public init(): void {
@@ -99,7 +103,10 @@ export default class Transcription extends BaseModule {
   }
 
   public start(connection: VoiceConnection, option: TranscriptionOption): void {
-    this.nowOption = option
+    const guildId = connection.joinConfig.guildId
+    const session = this.getOrCreateGuildSession(guildId)
+    session.option = option
+
     connection.receiver.speaking.on('start', (userId) => {
       void (async (): Promise<void> => {
         if (!connection.joinConfig.channelId) {
@@ -120,13 +127,14 @@ export default class Transcription extends BaseModule {
 
         await this.encodeOpusToPcm(uuid, opusStream)
         if (this.isValidVoiceData(uuid)) {
-          this.queue.push({
+          session.queue.push({
             uuid: uuid,
             userId: userId,
             sendChannelId: connection.joinConfig.channelId,
+            guildId: guildId,
           })
           await this.encodePcmToWav(uuid)
-          if (!this.isQueueProcessing) await this.progressQueue()
+          if (!session.isQueueProcessing) await this.progressQueue(guildId)
         }
         fs.unlinkSync(path.join(Transcription.TEMP_DIR, `${uuid}.pcm`))
 
@@ -160,22 +168,21 @@ export default class Transcription extends BaseModule {
       console.log('[discord-whisper]The connection has been destroyed')
       const interval = setInterval(() => {
         void (async (): Promise<void> => {
-          if (this.queue.length === 0) {
+          if (session.queue.length === 0) {
             clearInterval(interval)
             if (
               connection.joinConfig.channelId &&
-              this.nowOption.exportReport
+              session.option.exportReport
             ) {
-              fs.writeFileSync(
-                path.join(Transcription.TEMP_DIR, 'report.txt'),
-                this.report,
+              const reportPath = path.join(
+                Transcription.TEMP_DIR,
+                `report_${guildId}.txt`,
               )
+              fs.writeFileSync(reportPath, session.report)
               const channel = await this.client.channels.fetch(
                 connection.joinConfig.channelId,
               )
-              const attachment = new AttachmentBuilder(
-                path.join(Transcription.TEMP_DIR, 'report.txt'),
-              )
+              const attachment = new AttachmentBuilder(reportPath)
               if (channel?.isVoiceBased()) {
                 await channel.send({
                   content: '今回のレポート:',
@@ -184,31 +191,31 @@ export default class Transcription extends BaseModule {
               }
             }
             console.log('[discord-whisper]Queue is empty, stopping interval')
-            fs.readdir(Transcription.TEMP_DIR, (err, files) => {
-              if (err) {
-                console.error(
-                  '[discord-whisper]Error reading temp directory:',
-                  err,
-                )
-                return
-              }
-              files.forEach((file) => {
-                if (
-                  file.endsWith('.wav') ||
-                  file.endsWith('.pcm') ||
-                  file.endsWith('.txt')
-                ) {
-                  fs.unlinkSync(path.join(Transcription.TEMP_DIR, file))
-                  console.log(`[discord-whisper]Deleted temp file: ${file}`)
-                }
-              })
-            })
-            this.report = ''
+            this.cleanupTempFiles(guildId)
+            this.guildSessions.delete(guildId)
             return
           }
         })()
       }, 1000)
     })
+  }
+
+  private getOrCreateGuildSession(guildId: string): GuildSession {
+    if (!this.guildSessions.has(guildId)) {
+      this.guildSessions.set(guildId, {
+        queue: [],
+        isQueueProcessing: false,
+        option: {
+          sendRealtimeMessage: true,
+          exportReport: true,
+        },
+        report: '',
+      })
+    }
+    const session = this.guildSessions.get(guildId)
+    if (!session)
+      throw new Error(`Failed to create session for guild ${guildId}`)
+    return session
   }
 
   private async encodeOpusToPcm(
@@ -311,13 +318,14 @@ export default class Transcription extends BaseModule {
     }
   }
 
-  private async progressQueue(): Promise<void> {
-    this.isQueueProcessing = true
-    const completedItem = this.queue.shift()
+  private async progressQueue(guildId: string): Promise<void> {
+    const session = this.getOrCreateGuildSession(guildId)
+    session.isQueueProcessing = true
+    const completedItem = session.queue.shift()
     if (completedItem) {
       const context = await this.transcribeAudio(completedItem.uuid)
       if (context) {
-        if (completedItem.sendChannelId && this.nowOption.sendRealtimeMessage) {
+        if (completedItem.sendChannelId && session.option.sendRealtimeMessage) {
           const channel = await this.client.channels.fetch(
             completedItem.sendChannelId,
           )
@@ -332,15 +340,15 @@ export default class Transcription extends BaseModule {
             }
           }
         }
-        if (this.nowOption.exportReport) {
+        if (session.option.exportReport) {
           const user = await this.client.users.fetch(completedItem.userId)
-          this.report += `User: ${user.displayName}(ID:${completedItem.userId})\n`
-          this.report += `Transcription: ${context}\n\n`
+          session.report += `User: ${user.displayName}(ID:${completedItem.userId})\n`
+          session.report += `Transcription: ${context}\n\n`
         }
       }
     }
-    if (this.queue.length > 0) void this.progressQueue()
-    else this.isQueueProcessing = false
+    if (session.queue.length > 0) void this.progressQueue(guildId)
+    else session.isQueueProcessing = false
   }
 
   private isValidVoiceData(uuid: string): boolean {
@@ -548,5 +556,26 @@ export default class Transcription extends BaseModule {
       `[discord-whisper]Valid Japanese transcription: "${trimmedText}"`,
     )
     return true
+  }
+
+  private cleanupTempFiles(guildId: string): void {
+    fs.readdir(Transcription.TEMP_DIR, (err, files) => {
+      if (err) {
+        console.error('[discord-whisper]Error reading temp directory:', err)
+        return
+      }
+      files.forEach((file) => {
+        if (
+          file.endsWith('.wav') ||
+          file.endsWith('.pcm') ||
+          file.endsWith('.txt') ||
+          file.includes(`_${guildId}_`) ||
+          file.includes(`_${guildId}.`)
+        ) {
+          fs.unlinkSync(path.join(Transcription.TEMP_DIR, file))
+          console.log(`[discord-whisper]Deleted temp file: ${file}`)
+        }
+      })
+    })
   }
 }
