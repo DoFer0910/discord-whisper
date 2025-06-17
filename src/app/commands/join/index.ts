@@ -3,7 +3,7 @@ import {
   getVoiceConnection,
   joinVoiceChannel,
 } from '@discordjs/voice'
-import { PermissionFlagsBits } from 'discord.js'
+import { ApplicationCommandOptionType, PermissionFlagsBits } from 'discord.js'
 import { ChatInputCommandInteraction } from 'discord.js'
 import { ApplicationCommandData } from 'mopo-discordjs'
 
@@ -11,8 +11,22 @@ import Transcription from '@/app/modules/transcription'
 
 export default {
   name: 'join',
-  description: '動作テスト用',
+  description: 'ボイスチャンネルに参加して音声転写を開始します',
   defaultMemberPermissions: PermissionFlagsBits.Administrator,
+  options: [
+    {
+      name: 'realtime',
+      description: 'リアルタイムメッセージ送信を有効にする',
+      type: ApplicationCommandOptionType.Boolean,
+      required: false,
+    },
+    {
+      name: 'report',
+      description: '退室時のレポート出力を有効にする',
+      type: ApplicationCommandOptionType.Boolean,
+      required: false,
+    },
+  ],
   execute: async (
     interaction: ChatInputCommandInteraction,
     module,
@@ -67,9 +81,14 @@ export default {
       selfMute: true,
       debug: true,
     })
+
+    const sendRealtimeMessage =
+      interaction.options.getBoolean('realtime') ?? true
+    const exportReport = interaction.options.getBoolean('report') ?? true
+
     module.start(connection, {
-      sendRealtimeMessage: true,
-      exportReport: true,
+      sendRealtimeMessage,
+      exportReport,
     })
 
     await interaction.editReply({

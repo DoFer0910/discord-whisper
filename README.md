@@ -6,13 +6,9 @@ OpenAI-WhisperをつかってDiscordの音声通話の文字起こしをするBo
 > - 環境変数からわかるように、現行では1サーバー1プロセスです。ちょっとイジれば複数対応はできます。
 
 #### Features
-- /join --- ボイスチャットに参加させるコマンド
-- /leave --- ボイスチャットから退室させるコマンド
 - ボイスチャットが0人になると自動退室する機能
-- Teamsのように、誰がったかわかりやすい表示方法(WebHook)
-  - 気が向いたらONOFFできるように
+- Teamsのように、誰が話したかわかりやすい表示方法(WebHook)
 - 退室時のレポート機能
-  - 気が向いたらONOFFできるように
 
 ## How to Use?
 #### Env
@@ -37,4 +33,11 @@ npx nodejs-whisper download
 npm run start
 ```
 
+#### Commands
 
+- `/join [realtime:boolean] [report:boolean]`
+  - ボイスチャンネルに参加して音声転写を開始
+  - `realtime`: リアルタイムメッセージ送信を有効/無効 (デフォルト: true)
+  - `report`: 退室時のレポート出力を有効/無効 (デフォルト: true)
+- `/leave`
+  - ボイスチャンネルから退室

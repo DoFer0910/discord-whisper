@@ -7,7 +7,7 @@ import Transcription from '@/app/modules/transcription'
 
 export default {
   name: 'leave',
-  description: '動作テスト用',
+  description: 'BOTをチャンネルから切断します',
   defaultMemberPermissions: PermissionFlagsBits.Administrator,
   execute: async (
     interaction: ChatInputCommandInteraction,
