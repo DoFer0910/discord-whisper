@@ -72,7 +72,7 @@ export default class Transcription extends BaseModule {
       translateToEnglish: false,
       language: 'ja',
       wordTimestamps: false,
-      timestamps_length: 0,
+      timestamps_length: 20,
       splitOnWord: true,
     },
   }
