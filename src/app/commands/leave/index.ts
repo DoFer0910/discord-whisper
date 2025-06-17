@@ -23,13 +23,6 @@ export default {
       return
     }
 
-    if (module.getGuildInProgress(interaction.guild.id)) {
-      await interaction.editReply({
-        content: '現在、別の処理が実行中です。しばらくお待ちください。',
-      })
-      return
-    }
-
     const member = await interaction.guild.members
       .fetch(interaction.user.id)
       .catch(() => undefined)
@@ -54,9 +47,23 @@ export default {
       })
       return
     }
-    connection.destroy()
     await interaction.editReply({
-      content: 'ボイスチャンネルから切断しました。',
+      content: '処理を停止しています...',
     })
+
+    const hasSession = module.getGuildInProgress(interaction.guild.id)
+    const stopped = module.stopAndExport(interaction.guild.id, async () => {
+      await interaction.editReply({
+        content: hasSession
+          ? 'ボイスチャンネルから切断しました。レポートと音声ファイルの出力が完了しました。'
+          : 'ボイスチャンネルから切断しました。',
+      })
+    })
+
+    if (!stopped) {
+      await interaction.editReply({
+        content: 'ボイスチャンネルに接続していません。',
+      })
+    }
   },
 } as const satisfies ApplicationCommandData<Transcription>

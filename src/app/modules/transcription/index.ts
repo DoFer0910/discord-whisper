@@ -41,6 +41,7 @@ interface GuildSession {
     filePath: string
   }[]
   sessionStartTime: number
+  onCompleteCallback?: () => Promise<void>
 }
 
 export default class Transcription extends BaseModule {
@@ -92,6 +93,20 @@ export default class Transcription extends BaseModule {
     return session
       ? session.isQueueProcessing || session.queue.length > 0
       : false
+  }
+
+  public stopAndExport(
+    guildId: string,
+    onComplete?: () => Promise<void>,
+  ): boolean {
+    const connection = getVoiceConnection(guildId)
+    if (!connection) return false
+
+    const session = this.guildSessions.get(guildId)
+    if (session && onComplete) session.onCompleteCallback = onComplete
+
+    connection.destroy()
+    return true
   }
 
   public init(): void {
@@ -270,6 +285,9 @@ export default class Transcription extends BaseModule {
               }
             }
             console.log('[discord-whisper]Queue is empty, stopping interval')
+
+            if (session.onCompleteCallback) await session.onCompleteCallback()
+
             this.cleanupTempFiles(guildId)
             this.guildSessions.delete(guildId)
             return
