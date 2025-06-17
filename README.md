@@ -1,6 +1,6 @@
 ## What is This?
 
-OpenAI-WhisperをつかってDiscordの音声通話の文字起こしをするBot
+OpenAI-WhisperをつかってDiscordの音声通話の文字起こしをするBot<br>
 日本語のみに対応しています。
 
 ## Features
