@@ -3,9 +3,6 @@
 OpenAI-WhisperをつかってDiscordの音声通話の文字起こしをするBot
 日本語のみに対応しています。
 
-> [!NOTE]
-> 複数サーバー対応済み：1つのBotプロセスで複数のDiscordサーバーを同時に管理できます。
-
 ## Features
 
 - **音声転写**: リアルタイムで音声をテキストに変換
@@ -78,7 +75,3 @@ npm run start
 ```
 
 Bot起動後、DiscordサーバーでSlashコマンドが利用可能になります。
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
