@@ -6,6 +6,7 @@ import {
   VoiceConnection,
   VoiceConnectionStatus,
 } from '@discordjs/voice'
+import crypto from 'crypto'
 import { AttachmentBuilder, Channel, VoiceState, Webhook } from 'discord.js'
 import fs from 'fs'
 import { BaseModule } from 'mopo-discordjs'
@@ -149,9 +150,7 @@ export default class Transcription extends BaseModule {
             entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
             entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
           ])
-          // Seems to be reconnecting to a new channel - ignore disconnect
         } catch {
-          // Seems to be a real disconnect which SHOULDN'T be recovered from
           connection.destroy()
         }
       })()
@@ -263,7 +262,17 @@ export default class Transcription extends BaseModule {
       )
       return ''
     })
-    return context.replace(/(?=\[).*?(?<=\])\s\s/g, '')
+
+    const cleanedContext = context.replace(/(?=\[).*?(?<=\])\s\s/g, '')
+
+    if (!this.isValidJapaneseTranscription(cleanedContext)) {
+      console.warn(
+        `[discord-whisper]Transcription failed Japanese validation: "${cleanedContext}"`,
+      )
+      return undefined
+    }
+
+    return cleanedContext
   }
 
   private async fetchWebhook(channel: Channel): Promise<Webhook | undefined> {
@@ -340,6 +349,7 @@ export default class Transcription extends BaseModule {
       console.warn(`[discord-whisper]PCM file not found: ${pcmFilePath}`)
       return false
     }
+
     const stats = fs.statSync(pcmFilePath)
     const fileSizeInBytes = stats.size
     const durationInSeconds = fileSizeInBytes / (48000 * 2 * 2) // 48kHz, 2 channels, 2 bytes per sample
@@ -351,8 +361,191 @@ export default class Transcription extends BaseModule {
       return false
     }
 
+    if (durationInSeconds > 30) {
+      console.warn(
+        `[discord-whisper]PCM file too long: ${pcmFilePath} (${durationInSeconds.toString()}s)`,
+      )
+      return false
+    }
+
+    if (!this.hasValidAudioLevel(pcmFilePath)) {
+      console.warn(
+        `[discord-whisper]PCM file has insufficient audio level: ${pcmFilePath}`,
+      )
+      return false
+    }
+
+    if (!this.detectVoiceActivity(pcmFilePath, durationInSeconds)) {
+      console.warn(
+        `[discord-whisper]No voice activity detected: ${pcmFilePath}`,
+      )
+      return false
+    }
+
     console.log(
       `[discord-whisper]PCM file is valid: ${pcmFilePath} (${durationInSeconds.toString()}s)`,
+    )
+    return true
+  }
+
+  private hasValidAudioLevel(pcmFilePath: string): boolean {
+    try {
+      const pcmData = fs.readFileSync(pcmFilePath)
+      let sumSquared = 0
+      let maxAmplitude = 0
+      const sampleCount = pcmData.length / 2 // 16-bit samples
+
+      // Reads PCM data as 16-bit samples and calculates RMS
+      for (let i = 0; i < pcmData.length; i += 2) {
+        const sample = pcmData.readInt16LE(i)
+        const amplitude = Math.abs(sample)
+        sumSquared += sample * sample
+        maxAmplitude = Math.max(maxAmplitude, amplitude)
+      }
+
+      const rms = Math.sqrt(sumSquared / sampleCount)
+      const rmsDb = 20 * Math.log10(rms / 32767) // dB calculation based on 16-bit max
+
+      // Volume threshold: above -40dB, max amplitude above 1000
+      const hasValidRms = rmsDb > -40
+      const hasValidPeak = maxAmplitude > 1000
+
+      console.log(
+        `[discord-whisper]Audio level check - RMS: ${rmsDb.toFixed(2)}dB, Peak: ${maxAmplitude.toString()}, Valid: ${String(hasValidRms && hasValidPeak)}`,
+      )
+
+      return hasValidRms && hasValidPeak
+    } catch (error) {
+      console.error('[discord-whisper]Error analyzing audio level:', error)
+      return false
+    }
+  }
+
+  private detectVoiceActivity(
+    pcmFilePath: string,
+    durationInSeconds: number,
+  ): boolean {
+    try {
+      const pcmData = fs.readFileSync(pcmFilePath)
+      const sampleRate = 48000
+      const channels = 2
+      const frameSize = Math.floor(sampleRate * 0.025) * channels * 2 // 25ms frames
+      const frameCount = Math.floor(pcmData.length / frameSize)
+
+      let voiceFrames = 0
+      const energyThreshold = 1000000 // Energy threshold
+
+      // Future expansion: dynamic threshold adjustment using durationInSeconds is possible
+      // Currently using fixed threshold
+      const adaptiveThreshold =
+        durationInSeconds > 2 ? energyThreshold * 0.8 : energyThreshold
+
+      for (let frame = 0; frame < frameCount; frame++) {
+        const frameStart = frame * frameSize
+        const frameEnd = Math.min(frameStart + frameSize, pcmData.length)
+        let frameEnergy = 0
+
+        for (let i = frameStart; i < frameEnd; i += 2) {
+          const sample = pcmData.readInt16LE(i)
+          frameEnergy += sample * sample
+        }
+
+        if (frameEnergy > adaptiveThreshold) voiceFrames++
+      }
+
+      const voiceRatio = voiceFrames / frameCount
+      const minVoiceRatio = 0.1 // Audio must be detected in at least 10% of frames
+
+      console.log(
+        `[discord-whisper]VAD analysis - Voice frames: ${voiceFrames.toString()}/${frameCount.toString()} (${(voiceRatio * 100).toFixed(1)}%), Valid: ${String(voiceRatio >= minVoiceRatio)}`,
+      )
+
+      return voiceRatio >= minVoiceRatio
+    } catch (error) {
+      console.error(
+        '[discord-whisper]Error in voice activity detection:',
+        error,
+      )
+      return false
+    }
+  }
+
+  private isValidJapaneseTranscription(text: string): boolean {
+    if (!text || text.trim().length === 0) return false
+
+    const trimmedText = text.trim()
+
+    if (trimmedText.length < 2) return false
+
+    if (trimmedText.length > 200) {
+      console.warn(
+        `[discord-whisper]Transcription too long (${trimmedText.length.toString()} chars)`,
+      )
+      return false
+    }
+
+    const commonFalsePositives = [
+      'ありがとうございました',
+      'お疲れ様でした',
+      'そうですね',
+      'はい',
+      'いえ',
+      'うん',
+      'そう',
+      '...',
+      '。。。',
+      'えーと',
+      'あのー',
+      'まあ',
+      'ちょっと',
+      'Thank you',
+      'thank you',
+    ]
+
+    if (trimmedText.length <= 10) {
+      const isCommonFalsePositive = commonFalsePositives.some((pattern) =>
+        trimmedText.includes(pattern),
+      )
+      if (isCommonFalsePositive) {
+        console.warn(
+          `[discord-whisper]Filtered common false positive: "${trimmedText}"`,
+        )
+        return false
+      }
+    }
+
+    const japaneseCharRegex = /[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]/
+    const hasJapaneseChars = japaneseCharRegex.test(trimmedText)
+
+    const englishOnlyRegex = /^[a-zA-Z\s.,!?]+$/
+    const isEnglishOnly = englishOnlyRegex.test(trimmedText)
+
+    if (isEnglishOnly) {
+      console.warn(
+        `[discord-whisper]Filtered English-only transcription: "${trimmedText}"`,
+      )
+      return false
+    }
+
+    const symbolOnlyRegex = /^[.,!?。、！？\s\-_]+$/
+    const isSymbolOnly = symbolOnlyRegex.test(trimmedText)
+
+    if (isSymbolOnly) {
+      console.warn(
+        `[discord-whisper]Filtered symbol-only transcription: "${trimmedText}"`,
+      )
+      return false
+    }
+
+    if (!hasJapaneseChars) {
+      console.warn(
+        `[discord-whisper]No Japanese characters found: "${trimmedText}"`,
+      )
+      return false
+    }
+
+    console.log(
+      `[discord-whisper]Valid Japanese transcription: "${trimmedText}"`,
     )
     return true
   }
