@@ -66,7 +66,7 @@ npx nodejs-whisper download
 > - 初回実行時に約1.5GB〜3GBのモデルファイルをダウンロード
 > - ダウンロードには時間がかかる場合があります
 > - CUDAが利用可能な場合、GPU加速が有効になります
-> - インストールに失敗する場合は[nodejs-whisper公式ドキュメント](https://github.com/your-github/nodejs-whisper)を参照してください
+> - インストールに失敗する場合は[nodejs-whisper公式ドキュメント](https://www.npmjs.com/package/nodejs-whisper)を参照してください
 
 ### Running the Bot
 
