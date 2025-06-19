@@ -42,6 +42,7 @@ interface GuildSession {
   }[]
   sessionStartTime: number
   onCompleteCallback?: () => Promise<void>
+  subscribedUsers: Set<string>
 }
 
 export default class Transcription extends BaseModule {
@@ -53,6 +54,8 @@ export default class Transcription extends BaseModule {
     '../', // project root
     'temp',
   )
+
+  private static readonly AFTER_SILENCE_DURATION = 800 // ms
 
   private static readonly whisperOptions: IOptions = {
     modelName: ModelName.LARGE_V3_TURBO,
@@ -141,40 +144,50 @@ export default class Transcription extends BaseModule {
     session.option = option
 
     connection.receiver.speaking.on('start', (userId) => {
-      void (async (): Promise<void> => {
-        if (!connection.joinConfig.channelId) {
-          console.warn(
-            '[discord-whisper]No channel ID found in connection join config',
-          )
-          return
-        }
-        console.log(`[discord-whisper]User ${userId} started speaking`)
-        const uuid = crypto.randomUUID()
-        const currentTime = Date.now()
+      if (session.subscribedUsers.has(userId)) {
+        console.log(
+          `[discord-whisper]User ${userId} is already subscribed, skipping`,
+        )
+        return
+      }
 
-        if (session.option.exportAudio) {
-          Transcription.ensureGuildTempDir(guildId)
-          session.audioRecordings.push({
-            uuid: uuid,
-            userId: userId,
-            startTime: currentTime,
-            filePath: path.join(
-              Transcription.getGuildTempDir(guildId),
-              `${uuid}.wav`,
-            ),
-          })
-        }
+      console.log(`[discord-whisper]User ${userId} started speaking`)
+      const uuid = crypto.randomUUID()
+      const currentTime = Date.now()
 
-        const opusStream = connection.receiver.subscribe(userId, {
-          end: {
-            behavior: EndBehaviorType.AfterSilence,
-            duration: 100,
-          },
+      if (session.option.exportAudio) {
+        Transcription.ensureGuildTempDir(guildId)
+        session.audioRecordings.push({
+          uuid: uuid,
+          userId: userId,
+          startTime: currentTime,
+          filePath: path.join(
+            Transcription.getGuildTempDir(guildId),
+            `${uuid}.wav`,
+          ),
         })
+      }
 
-        opusStream.on('end', () => {
+      const opusStream = connection.receiver.subscribe(userId, {
+        end: {
+          behavior: EndBehaviorType.AfterSilence,
+          duration: Transcription.AFTER_SILENCE_DURATION,
+        },
+      })
+
+      session.subscribedUsers.add(userId)
+
+      opusStream.on('end', () => {
+        void (async (): Promise<void> => {
+          if (!connection.joinConfig.channelId) {
+            console.warn(
+              '[discord-whisper]No channel ID found in connection join config',
+            )
+            return
+          }
           console.log(`[discord-whisper]Stream from user ${userId} has ended`)
 
+          session.subscribedUsers.delete(userId)
           if (session.option.exportAudio) {
             console.log(
               `[discord-whisper]Looking for recording with UUID: ${uuid}`,
@@ -197,23 +210,32 @@ export default class Transcription extends BaseModule {
           }
 
           opusStream.destroy()
-        })
+          await this.encodePcmToWav(guildId, uuid)
+          if (this.isValidVoiceData(guildId, uuid)) {
+            session.queue.push({
+              uuid: uuid,
+              userId: userId,
+              sendChannelId: connection.joinConfig.channelId,
+              guildId: guildId,
+            })
+            if (!session.isQueueProcessing) await this.progressQueue(guildId)
+          }
+          fs.unlinkSync(
+            path.join(Transcription.getGuildTempDir(guildId), `${uuid}.pcm`),
+          )
+        })()
+      })
 
-        await this.encodeOpusToPcm(guildId, uuid, opusStream)
-        await this.encodePcmToWav(guildId, uuid)
-        if (this.isValidVoiceData(guildId, uuid)) {
-          session.queue.push({
-            uuid: uuid,
-            userId: userId,
-            sendChannelId: connection.joinConfig.channelId,
-            guildId: guildId,
-          })
-          if (!session.isQueueProcessing) await this.progressQueue(guildId)
-        }
-        fs.unlinkSync(
-          path.join(Transcription.getGuildTempDir(guildId), `${uuid}.pcm`),
+      opusStream.on('error', (error) => {
+        console.error(
+          `[discord-whisper]Stream error for user ${userId}:`,
+          error,
         )
-      })()
+        session.subscribedUsers.delete(userId)
+        opusStream.destroy()
+      })
+
+      void this.encodeOpusToPcm(guildId, uuid, opusStream)
     })
 
     connection.on(VoiceConnectionStatus.Ready, () => {
@@ -237,6 +259,9 @@ export default class Transcription extends BaseModule {
 
     connection.on(VoiceConnectionStatus.Destroyed, () => {
       console.log('[discord-whisper]The connection has been destroyed')
+
+      session.subscribedUsers.clear()
+
       const interval = setInterval(() => {
         void (async (): Promise<void> => {
           if (session.queue.length === 0) {
@@ -277,10 +302,12 @@ export default class Transcription extends BaseModule {
                 )
                 const audioAttachment = new AttachmentBuilder(mergedAudioPath)
                 if (channel?.isVoiceBased()) {
-                  await channel.send({
-                    content: '録音ファイル:',
-                    files: [audioAttachment],
-                  })
+                  await channel
+                    .send({
+                      content: '録音ファイル:',
+                      files: [audioAttachment],
+                    })
+                    .catch(() => undefined)
                 }
               }
             }
@@ -310,6 +337,7 @@ export default class Transcription extends BaseModule {
         report: '',
         audioRecordings: [],
         sessionStartTime: Date.now(),
+        subscribedUsers: new Set<string>(),
       })
     }
     const session = this.guildSessions.get(guildId)
@@ -615,6 +643,7 @@ export default class Transcription extends BaseModule {
     const commonFalsePositives = [
       'ありがとうございました',
       'お疲れ様でした',
+      'ご視聴ありがとうございました',
       'そうですね',
       'はい',
       'いえ',
@@ -684,11 +713,11 @@ export default class Transcription extends BaseModule {
       try {
         const files = fs.readdirSync(guildDir)
         files.forEach((file) => {
+          if (file.startsWith('merged_audio_')) return
           const filePath = path.join(guildDir, file)
           fs.unlinkSync(filePath)
           console.log(`[discord-whisper]Deleted temp file: ${file}`)
         })
-        fs.rmdirSync(guildDir)
         console.log(
           `[discord-whisper]Deleted guild temp directory: ${guildDir}`,
         )
