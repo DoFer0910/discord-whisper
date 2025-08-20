@@ -21,7 +21,6 @@
 		"discord.js": "^14.14.1",
 		"dotenv": "^16.5.0",
 		"mopo-discordjs": "^0.1.6",
-		"nodejs-whisper": "^0.2.9",
 		"path": "^0.12.7",
 		"prism-media": "^1.3.5",
 		"shelljs": "^0.10.0",

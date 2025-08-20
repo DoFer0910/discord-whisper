@@ -58,8 +58,8 @@ export default class Transcription extends BaseModule {
   private static readonly AFTER_SILENCE_DURATION = 800 // ms
 
   private static readonly whisperOptions: IOptions = {
-    modelName: ModelName.LARGE_V3_TURBO,
-    autoDownloadModelName: ModelName.LARGE_V3_TURBO,
+    modelName: ModelName.MEDIUM,
+    autoDownloadModelName: ModelName.MEDIUM,
     removeWavFileAfterTranscription: false,
     withCuda: true,
     logger: console,
@@ -510,7 +510,7 @@ export default class Transcription extends BaseModule {
     const fileSizeInBytes = stats.size
     const durationInSeconds = fileSizeInBytes / (48000 * 2 * 2) // 48kHz, 2 channels, 2 bytes per sample
 
-    if (durationInSeconds < 0.5) {
+    if (durationInSeconds < 0.3) {
       console.warn(
         `[discord-whisper]PCM file too short: ${pcmFilePath} (${durationInSeconds.toString()}s)`,
       )
@@ -562,9 +562,9 @@ export default class Transcription extends BaseModule {
       const rms = Math.sqrt(sumSquared / sampleCount)
       const rmsDb = 20 * Math.log10(rms / 32767) // dB calculation based on 16-bit max
 
-      // Volume threshold: above -40dB, max amplitude above 1000
-      const hasValidRms = rmsDb > -40
-      const hasValidPeak = maxAmplitude > 1000
+      // Volume threshold: above -50dB, max amplitude above 500 (more permissive)
+      const hasValidRms = rmsDb > -50
+      const hasValidPeak = maxAmplitude > 500
 
       console.log(
         `[discord-whisper]Audio level check - RMS: ${rmsDb.toFixed(2)}dB, Peak: ${maxAmplitude.toString()}, Valid: ${String(hasValidRms && hasValidPeak)}`,
